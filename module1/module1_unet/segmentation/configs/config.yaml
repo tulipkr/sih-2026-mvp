@@ -1,0 +1,70 @@
+data:
+  train_manifest_path: "/kaggle/working/pretiled_train/manifest.json"
+  val_manifest_path: "/kaggle/working/pretiled_val/manifest.json"
+  patch_size: 256
+  bands: ["VV", "VH"]
+  in_channels: 2
+  val_fraction: 0.2
+  seed: 42
+
+  # Training-time tiling of large Zenodo scenes (spec §12) — only used if a
+  # manifest entry's image is larger than patch_size; inference-time patches
+  # from Ishita are assumed pre-tiled to patch_size already.
+  tiling:
+    strategy: sliding_window   # sliding_window | random_crop
+    stride: 256                 # only used if strategy == sliding_window
+
+  augmentation:
+    horizontal_flip: true
+    vertical_flip: true
+    rotate_90: true
+    # No color jitter — SAR backscatter is a physical quantity, not RGB (§12).
+
+  class_imbalance:
+    weighted_sampling: true
+    min_oil_fraction_target: 0.3   # fraction of sampled tiles that should contain oil pixels
+
+  normalization:
+    method: none          # none | db_clip_minmax  — see warning above
+    db_clip_min: -30       # only used if method == db_clip_minmax
+    db_clip_max: 0
+
+model:
+  in_channels: 2
+  out_channels: 1
+  backbone: efficientnet-b3   # efficientnet-b3 | resnet34
+  pretrained: true             # ADDED beyond spec: set false if no internet access for weights
+
+loss:
+  bce_weight: 0.5
+  dice_weight: 0.5
+
+train:
+  batch_size: 12
+  epochs: 25
+  learning_rate: 1.0e-4
+  num_workers: 2
+  early_stopping_patience: 8
+  device: auto              # auto | cpu | cuda
+  checkpoint_path: "checkpoints/best_model.pt"
+  amp: false                 # mixed precision, only used if device resolves to cuda
+  lookalike_manifest_path: "data/test_lookalike/manifest.json"  # optional, for FP check
+
+inference:
+  threshold: 0.5              # NOT yet re-tuned on a real val set — see README
+  output_dir: "outputs"
+  model_version: "unet_effb3_v1"
+  on_dimension_mismatch: reject       # reject | resize  — not specified by spec, defaulting safe
+  on_missing_checkpoint: fallback         # error | fallback — not specified by spec, defaulting safe
+
+fallback:
+  db_threshold: -18.0          # pixels below this (on the VV band, dB scale) flagged as oil
+  min_blob_area_px: 20
+  # Land handling: excludes pixels Ishita's preprocessing has already marked
+  # as land (NaN or exactly 0.0 in the raw input). Does NOT compute its own
+  # land mask — see the ambiguity note in this module's README.
+  land_marker: nan_or_zero      # nan_or_zero | none
+
+logging:
+  log_dir: "outputs/runs"
+  level: INFO
