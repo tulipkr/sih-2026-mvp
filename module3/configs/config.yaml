@@ -1,0 +1,12 @@
+# Module 3 (Environment / Backward Advection) configuration — spec §25 defaults.
+backward_window_hours: 48
+max_backward_window_hours: 72
+time_step_hours: 1
+wind_drift_factor: 0.03
+uncertainty_method: fixed_radius_heuristic   # or perturbation_ensemble (not implemented — see src/uncertainty.py)
+uncertainty_base_radius_km: 5
+uncertainty_growth_km_per_hour: 0.5
+search_bbox_margin_deg: 2.0
+era5_variables: [u10, v10]
+glorys_variables: [uo, vo]
+seed: 42
