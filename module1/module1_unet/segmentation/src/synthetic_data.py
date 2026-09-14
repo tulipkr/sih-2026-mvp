@@ -108,6 +108,83 @@ def generate_synthetic_dataset(
     return manifest_path
 
 
+def generate_synthetic_scene(
+    output_dir: str | Path,
+    scene_id: str = "synthetic_scene_multi",
+    grid: tuple[int, int] = (2, 2),
+    patch_size: int = 64,
+    seed: int = 42,
+    oil_tile: tuple[int, int] | None = (0, 0),
+    drop_geo_on_tile: tuple[int, int] | None = None,
+) -> Path:
+    """NEW — generates several tiles that all share one scene_id (mirroring
+    how Ishita's real Stage A manifest actually looks: one scene_id per
+    scene, a unique patch_id per tile), with correctly-offset per-tile
+    transforms, for testing infer_scene.py's stitching. `grid=(rows, cols)`.
+    `oil_tile`/`drop_geo_on_tile` are (row, col) tile indices, or None.
+    """
+    from rasterio.transform import Affine
+
+    rng = np.random.RandomState(seed)
+    output_dir = Path(output_dir)
+    patches_dir = output_dir / "patches"
+    patches_dir.mkdir(parents=True, exist_ok=True)
+
+    base_lon, base_lat = 80.30, 13.20
+    pixel_deg = 0.0001
+    rows, cols = grid
+    manifest_entries = []
+
+    for r in range(rows):
+        for c in range(cols):
+            patch_id = f"{scene_id}_{r:02d}_{c:02d}"
+            # Background well clear of the fallback detector's default -18dB
+            # threshold (4 std away at scale=2.0) so random noise can't
+            # spuriously cross it and form a fake "blob" — with the previous
+            # loc=-15/scale=3.0 (only ~1 std from -18), background pixels
+            # legitimately had a ~16% chance of falling below threshold,
+            # which is a synthetic-data bug (not a stitching bug): it made
+            # "no oil anywhere" scenes intermittently register false
+            # detections through pure noise, not through any defect in
+            # scene-level aggregation.
+            vv = rng.normal(loc=-10.0, scale=2.0, size=(patch_size, patch_size)).astype(np.float32)
+            vh = rng.normal(loc=-15.0, scale=2.0, size=(patch_size, patch_size)).astype(np.float32)
+
+            if oil_tile is not None and (r, c) == oil_tile:
+                cy, cx = patch_size // 2, patch_size // 2
+                radius = max(3, patch_size // 6)
+                yy, xx = np.ogrid[:patch_size, :patch_size]
+                blob = (yy - cy) ** 2 + (xx - cx) ** 2 <= radius ** 2
+                vv[blob] -= 15.0  # -> mean -25 dB, well clear of -18 on the oil side
+                vh[blob] -= 10.0
+
+            image = np.stack([vv, vh], axis=0)
+            transform = Affine(
+                pixel_deg, 0.0, base_lon + c * patch_size * pixel_deg,
+                0.0, -pixel_deg, base_lat - r * patch_size * pixel_deg,
+            )
+            crs = "EPSG:4326"
+            drop_geo = drop_geo_on_tile is not None and (r, c) == drop_geo_on_tile
+
+            patch_path = patches_dir / f"{patch_id}.tif"
+            _write_geotiff(patch_path, image, transform, crs, dtype="float32")
+
+            manifest_entries.append({
+                "scene_id": scene_id,
+                "patch_id": patch_id,
+                "patch_path": str(patch_path),
+                "acquisition_timestamp_utc": "2021-10-03T01:49:27Z",
+                "crs": None if drop_geo else crs,
+                "transform": None if drop_geo else list(transform)[:6],
+                "bands": ["VV", "VH"],
+            })
+
+    manifest_path = output_dir / "manifest.json"
+    with manifest_path.open("w") as f:
+        json.dump(manifest_entries, f, indent=2)
+    return manifest_path
+
+
 def generate_lookalike_set(
     output_dir: str | Path, n_samples: int = 4, patch_size: int = 256, seed: int = 99
 ) -> Path:

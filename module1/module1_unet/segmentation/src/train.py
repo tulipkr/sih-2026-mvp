@@ -68,9 +68,14 @@ def run_training(config_path: str) -> dict:
         train_manifest_path = config["data"]["train_manifest_path"]
         val_manifest_path = config["data"]["val_manifest_path"]
     else:
-        # Backward compatibility for older tests/configs
-        train_manifest_path = config["data"]["manifest_path"]
-        val_manifest_path = config["data"]["manifest_path"]
+        # Single-manifest fallback (older/simpler configs and most of this
+        # module's own test fixtures use one manifest for both train+val
+        # rather than a real scene-level train/val split): reuses
+        # data.inference_manifest_path, the same key infer.py/infer_scene.py
+        # read — there is exactly one "manifest path" config key across this
+        # codebase now, not two names for the same thing.
+        train_manifest_path = config["data"]["inference_manifest_path"]
+        val_manifest_path = config["data"]["inference_manifest_path"]
 
     with open(train_manifest_path, "r", encoding="utf-8") as f:
         train_data = json.load(f)

@@ -28,13 +28,50 @@ logger = logging.getLogger(__name__)
 
 
 def _find_entry(entries: list[dict], scene_id: str) -> dict:
-    for e in entries:
-        if e["scene_id"] == scene_id:
-            return e
+    """Find exactly one entry for single-patch inference.
+
+    Ishita's real Stage A manifests give every tile of one scene the *same*
+    `scene_id` (only `patch_path`/`patch_id` differ per tile). A unique
+    `patch_id` match is tried first. Falling back to `scene_id` must detect
+    ambiguity (more than one entry sharing that scene_id) and raise BEFORE
+    any image is loaded or resized — ambiguous *identification* of which
+    tile to run is a manifest-lookup problem, not a dimension problem, and
+    must never be masked by a later, unrelated error from whichever entry
+    happened to be picked first.
+    """
+    patch_id_matches = [e for e in entries if e.get("patch_id") == scene_id]
+    if patch_id_matches:
+        return patch_id_matches[0]
+
+    scene_matches = [e for e in entries if e["scene_id"] == scene_id]
+    if len(scene_matches) > 1:
+        raise ValueError(
+            f"'{scene_id}' matches {len(scene_matches)} manifest entries "
+            f"sharing that scene_id (multiple tiles, no patch_id disambiguates "
+            f"them). run_inference() only processes one patch — pass a "
+            f"specific patch_id instead, or use "
+            f"infer_scene.run_scene_inference() to process the whole scene "
+            f"and get one stitched result."
+        )
+    if len(scene_matches) == 1:
+        return scene_matches[0]
+
     raise ValueError(
-        f"scene_id '{scene_id}' not found in manifest. "
-        f"Available scene_ids: {[e['scene_id'] for e in entries]}"
+        f"'{scene_id}' not found as a patch_id or scene_id in manifest. "
+        f"Available scene_ids: {sorted({e['scene_id'] for e in entries})}"
     )
+
+
+def _find_entries_for_scene(entries: list[dict], scene_id: str) -> list[dict]:
+    """Return every manifest entry belonging to one scene (all its tiles),
+    in patch_path order, for scene-level orchestration (see infer_scene.py)."""
+    matches = [e for e in entries if e["scene_id"] == scene_id]
+    if not matches:
+        raise ValueError(
+            f"scene_id '{scene_id}' not found in manifest. "
+            f"Available scene_ids: {sorted({e['scene_id'] for e in entries})}"
+        )
+    return sorted(matches, key=lambda e: e.get("patch_id") or e["patch_path"])
 
 
 def _write_geotiff(path: Path, array: np.ndarray, transform_list, crs: str | None, dtype: str):
@@ -82,13 +119,11 @@ def _resize_or_reject(image: np.ndarray, expected_size: int, mode: str, scene_id
     raise ValueError(f"Unknown inference.on_dimension_mismatch '{mode}'")
 
 
-def run_inference(config_path: str, scene_id: str, checkpoint_path: str | None = None) -> dict:
-    config = load_config(config_path)
-    setup_logging(config["logging"]["log_dir"], config["logging"].get("level", "INFO"))
-
-    entries = load_manifest_entries(config["data"]["manifest_path"])
-    entry = _find_entry(entries, scene_id)
-
+def load_and_validate_patch(entry: dict, config: dict, label: str) -> tuple:
+    """Read one manifest entry's patch, apply the same validation/dimension
+    handling run_inference always has. `label` is just for error messages
+    (a scene_id for single-patch calls, or f"{scene_id}/{patch_id}" for
+    scene-level calls) — shared so both callers report errors identically."""
     import rasterio
 
     patch_path = Path(entry["patch_path"])
@@ -102,33 +137,44 @@ def run_inference(config_path: str, scene_id: str, checkpoint_path: str | None =
 
     if not np.isfinite(image).all():
         raise ValueError(
-            f"scene_id={scene_id}: input patch contains NaN/Inf values — rejecting "
+            f"{label}: input patch contains NaN/Inf values — rejecting "
             f"rather than running inference on corrupt input (spec §15/§16)."
         )
 
     expected_bands = config["data"]["bands"]
     if image.shape[0] != len(expected_bands):
         raise ValueError(
-            f"scene_id={scene_id}: patch has {image.shape[0]} bands, expected "
+            f"{label}: patch has {image.shape[0]} bands, expected "
             f"{len(expected_bands)} ({expected_bands}). Missing required channel — "
             f"hard error, no substitution (spec §17)."
         )
 
     image = _resize_or_reject(
-        image, config["data"]["patch_size"], config["inference"]["on_dimension_mismatch"], scene_id
+        image, config["data"]["patch_size"], config["inference"]["on_dimension_mismatch"], label
     )
 
     geolocation_incomplete = crs is None or transform is None
     if geolocation_incomplete:
         logger.warning(
-            f"scene_id={scene_id}: CRS or transform missing from input. Proceeding with "
+            f"{label}: CRS or transform missing from input. Proceeding with "
             f"inference (spec §17), but downstream geolocation will not be possible."
         )
 
-    checkpoint_path = Path(checkpoint_path or config["train"]["checkpoint_path"])
-    output_dir = Path(config["inference"]["output_dir"])
+    return image, crs, transform, geolocation_incomplete
 
-    fallback_used = False
+
+def resolve_inference_backend(config: dict, checkpoint_path: str | None = None):
+    """Decide once (per run, not per-tile) whether inference uses the trained
+    model or the rule-based fallback, and load whichever is needed.
+
+    Returns (fallback_used, model_or_None, device_or_None, checkpoint_path).
+    Shared by run_inference (single patch) and infer_scene.run_scene_inference
+    (many tiles of one scene) so a scene's tiles are never processed under a
+    mix of model/fallback — the decision and the model load happen exactly
+    once per run.
+    """
+    checkpoint_path = Path(checkpoint_path or config["train"]["checkpoint_path"])
+
     if not checkpoint_path.exists():
         on_missing = config["inference"].get("on_missing_checkpoint", "error")
         if on_missing == "error":
@@ -142,14 +188,27 @@ def run_inference(config_path: str, scene_id: str, checkpoint_path: str | None =
                 f"Checkpoint not found at {checkpoint_path.resolve()}. "
                 f"inference.on_missing_checkpoint='fallback' — using rule-based fallback detector."
             )
-            fallback_used = True
+            return True, None, None, checkpoint_path
         else:
             raise ValueError(f"Unknown inference.on_missing_checkpoint '{on_missing}'")
 
+    import torch
+
+    device = resolve_device(config["train"].get("device", "auto"))
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    model = build_model(checkpoint.get("config", config)).to(device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+    return False, model, device, checkpoint_path
+
+
+def run_tile_inference(image: np.ndarray, config: dict, fallback_used: bool, model, device):
+    """Run the model or the fallback detector on one already-validated,
+    already-normalized-or-not (see below) (C,H,W) tile. Returns
+    (probs, binary_mask, score_type, model_version)."""
     threshold = config["inference"]["threshold"]
 
     if fallback_used:
-        norm_cfg = NormalizationConfig.from_dict(config["data"].get("normalization"))
         # Fallback operates on the un-normalized dB values directly (its threshold
         # is itself a dB cutoff), so it does NOT apply config normalization.
         probs, binary_mask = run_fallback_detection(image, config["fallback"])
@@ -158,14 +217,8 @@ def run_inference(config_path: str, scene_id: str, checkpoint_path: str | None =
     else:
         import torch
 
-        device = resolve_device(config["train"].get("device", "auto"))
         norm_cfg = NormalizationConfig.from_dict(config["data"].get("normalization"))
         normalized = apply_normalization(image, norm_cfg)
-
-        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-        model = build_model(checkpoint.get("config", config)).to(device)
-        model.load_state_dict(checkpoint["model_state_dict"])
-        model.eval()
 
         with torch.no_grad():
             tensor = torch.from_numpy(normalized.copy()).float().unsqueeze(0).to(device)
@@ -175,6 +228,29 @@ def run_inference(config_path: str, scene_id: str, checkpoint_path: str | None =
         binary_mask = (probs > threshold).astype(np.uint8)
         score_type = "raw_sigmoid_output"
         model_version = config["inference"]["model_version"]
+
+    return probs, binary_mask, score_type, model_version
+
+
+def run_inference(config_path: str, scene_id: str, checkpoint_path: str | None = None) -> dict:
+    """Single-patch inference (unchanged public behavior/signature). scene_id
+    is looked up via _find_entry — which now also accepts a patch_id when the
+    manifest has one. For a whole scene with multiple tiles, use
+    infer_scene.run_scene_inference() instead, which stitches all of a
+    scene's tiles into one result."""
+    config = load_config(config_path)
+    setup_logging(config["logging"]["log_dir"], config["logging"].get("level", "INFO"))
+
+    entries = load_manifest_entries(config["data"]["inference_manifest_path"])
+    entry = _find_entry(entries, scene_id)
+
+    image, crs, transform, geolocation_incomplete = load_and_validate_patch(entry, config, scene_id)
+
+    output_dir = Path(config["inference"]["output_dir"])
+    fallback_used, model, device, checkpoint_path = resolve_inference_backend(config, checkpoint_path)
+    probs, binary_mask, score_type, model_version = run_tile_inference(
+        image, config, fallback_used, model, device
+    )
 
     positive_pixel_fraction = float(binary_mask.mean())
     no_oil_detected = positive_pixel_fraction == 0.0
@@ -195,7 +271,7 @@ def run_inference(config_path: str, scene_id: str, checkpoint_path: str | None =
         "crs": crs,
         "transform": transform,
         "geolocation_incomplete": geolocation_incomplete,
-        "threshold_used": float(threshold),
+        "threshold_used": float(config["inference"]["threshold"]),
         "positive_pixel_fraction": positive_pixel_fraction,
         "mean_score_in_positive_region": mean_score_in_positive_region,
         "no_oil_detected": no_oil_detected,

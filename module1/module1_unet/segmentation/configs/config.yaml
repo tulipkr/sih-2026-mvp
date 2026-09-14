@@ -1,6 +1,14 @@
 data:
   train_manifest_path: "/kaggle/working/pretiled_train/manifest.json"
   val_manifest_path: "/kaggle/working/pretiled_val/manifest.json"
+  # Separate from train/val: this is the manifest infer.py / infer_scene.py read
+  # from at inference time — i.e. Ishita's Stage A manifest.json for a real demo
+  # scene, NOT a training manifest. Previously infer.py read a
+  # config["data"]["manifest_path"] key that didn't exist here at all (a real
+  # bug — KeyError on any real run). Fixed by adding this key explicitly rather
+  # than overloading train/val paths, since inference manifests are a distinct
+  # thing produced by a different pipeline run.
+  inference_manifest_path: "outputs_stage_a/manifest.json"
   patch_size: 256
   bands: ["VV", "VH"]
   in_channels: 2

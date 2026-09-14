@@ -21,7 +21,7 @@ from src.train import run_training
 def _make_config(work_dir: Path, manifest_path: Path, lookalike_path: Path | None = None) -> Path:
     config = {
         "data": {
-            "manifest_path": str(manifest_path),
+            "inference_manifest_path": str(manifest_path),
             "patch_size": 64,
             "bands": ["VV", "VH"],
             "in_channels": 2,
@@ -114,7 +114,7 @@ def test_infer_on_corrupt_input_raises_explicit_error(trained_run, tmp_path):
     }]}))
 
     config = yaml.safe_load(Path(trained_run["config_path"]).read_text())
-    config["data"]["manifest_path"] = str(bad_manifest)
+    config["data"]["inference_manifest_path"] = str(bad_manifest)
     bad_config_path = tmp_path / "bad_config.yaml"
     with bad_config_path.open("w") as f:
         yaml.safe_dump(config, f)
