@@ -1,0 +1,162 @@
+{
+  "run_id": "demo-run-001",
+  "scene_id": "kamarajar-port-demo",
+  "run_mode": "precomputed",
+  "started_at_utc": "2026-09-09T03:00:00Z",
+  "completed_at_utc": "2026-09-09T03:15:00Z",
+  "overall_status": "success",
+
+  "stages": {
+    "sar_preprocessing": { "status": "success", "output_path": null, "error": null },
+    "segmentation": { "status": "success", "output_path": null, "error": null },
+    "geometry_extraction": {
+      "status": "success",
+      "output_paths": { "spill_geometry_geojson": null, "spill_summary": null },
+      "error": null
+    },
+    "drift_backtracking": { "status": "success", "output_path": null, "error": null },
+    "ais_ranking": {
+      "status": "success",
+      "output_paths": { "candidate_ranking": null, "normalized_ais_tracks": null },
+      "error": null
+    }
+  },
+
+  "failed_stage": null,
+
+  "results": {
+    "spill_geometry_geojson": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": {
+            "region_id": 1,
+            "scene_id": "kamarajar-port-demo",
+            "area_km2": 2.8,
+            "centroid_lat": 13.235,
+            "centroid_lon": 80.325,
+            "acquisition_timestamp_utc": "2026-09-09T02:30:00Z",
+            "mean_confidence": 0.87
+          },
+          "geometry": {
+            "type": "Polygon",
+            "coordinates": [[
+              [80.31, 13.25], [80.34, 13.25], [80.35, 13.23],
+              [80.32, 13.22], [80.30, 13.24], [80.31, 13.25]
+            ]]
+          }
+        }
+      ]
+    },
+
+    "spill_summary": {
+      "scene_id": "kamarajar-port-demo",
+      "num_regions": 1,
+      "total_area_km2": 2.8,
+      "no_oil_detected": false,
+      "geometry_unavailable": false
+    },
+
+    "source_estimate": {
+      "scene_id": "kamarajar-port-demo",
+      "region_id": 1,
+      "backtracking_valid": true,
+      "uncertainty_high": false,
+      "physically_implausible": false,
+      "uncertainty_method": "fixed_radius_heuristic",
+      "uncertainty_radius_km": 4.5,
+
+      "probable_source_region": {
+        "type": "Point",
+        "coordinates": [80.29, 13.27],
+        "radius_km": 4.5
+      },
+
+      "probable_source_time_window": {
+        "start": "2026-09-08T22:30:00Z",
+        "end": "2026-09-09T02:30:00Z"
+      },
+
+      "drift_trajectory": [
+        { "timestamp": "2026-09-09T02:30:00Z", "lat": 13.23, "lon": 80.35 },
+        { "timestamp": "2026-09-09T00:30:00Z", "lat": 13.25, "lon": 80.31 },
+        { "timestamp": "2026-09-08T22:30:00Z", "lat": 13.27, "lon": 80.29 }
+      ]
+    },
+
+    "candidate_ranking": {
+      "scene_id": "kamarajar-port-demo",
+      "region_id": 1,
+      "ais_data_source": "synthetic",
+      "disclaimer": "Ranking indicates compatibility with available evidence; it is not a determination of legal responsibility. AIS gaps increase uncertainty and are not evidence of guilt.",
+      "backtracking_valid": true,
+      "no_oil_detected": false,
+
+      "ranked_candidates": [
+        {
+          "rank": 1,
+          "mmsi": "123456789",
+          "vessel_name": "Demo Vessel 1",
+          "vessel_type": "Tanker",
+          "closest_approach_km": 1.8,
+          "closest_approach_time_utc": "2026-09-08T23:00:00Z",
+          "temporal_compatible": true,
+          "trajectory_drift_compatibility_score": 0.91,
+          "ais_completeness_score": 0.95,
+          "composite_score": 0.92,
+          "score_type": "heuristic_composite_score",
+          "evidence_summary": [
+            "Closest approach 1.8 km at 23:00 UTC; within source time window; course closely aligned with estimated drift."
+          ]
+        },
+        {
+          "rank": 2,
+          "mmsi": "987654321",
+          "vessel_name": "Demo Vessel 2",
+          "vessel_type": "Cargo",
+          "closest_approach_km": 6.4,
+          "closest_approach_time_utc": "2026-09-08T23:40:00Z",
+          "temporal_compatible": true,
+          "trajectory_drift_compatibility_score": 0.58,
+          "ais_completeness_score": 0.62,
+          "composite_score": 0.71,
+          "score_type": "heuristic_composite_score",
+          "evidence_summary": [
+            "Closest approach 6.4 km at 23:40 UTC; within source time window; course partially aligned with estimated drift; some AIS reporting gaps observed (context only, not a scoring penalty)."
+          ]
+        }
+      ]
+    },
+
+    "normalized_ais_tracks": {
+      "type": "FeatureCollection",
+      "features": [
+        {
+          "type": "Feature",
+          "properties": { "mmsi": "123456789", "vessel_name": "Demo Vessel 1" },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [[80.25, 13.18], [80.27, 13.20], [80.29, 13.22], [80.31, 13.24], [80.33, 13.26]]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": { "mmsi": "987654321", "vessel_name": "Demo Vessel 2" },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [[80.40, 13.18], [80.38, 13.20], [80.36, 13.22], [80.34, 13.24], [80.32, 13.26]]
+          }
+        },
+        {
+          "type": "Feature",
+          "properties": { "mmsi": "555555555", "vessel_name": "Non-candidate nearby vessel" },
+          "geometry": {
+            "type": "LineString",
+            "coordinates": [[80.50, 13.10], [80.48, 13.12], [80.46, 13.14]]
+          }
+        }
+      ]
+    }
+  }
+}
