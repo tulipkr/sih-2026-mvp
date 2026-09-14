@@ -19,6 +19,7 @@ NORMALIZED_COLUMNS = [
 # Adding a new AIS source later = adding one more dict here, no pipeline changes.
 
 MARINECADASTRE_COLUMN_MAP = {
+    # Standard Marine Cadastre format
     "MMSI": "MMSI",
     "BaseDateTime": "timestamp",
     "LAT": "latitude",
@@ -28,6 +29,17 @@ MARINECADASTRE_COLUMN_MAP = {
     "Heading": "heading",
     "VesselName": "vessel_name",
     "VesselType": "vessel_type",
+
+    # Actual 2021 Marine Cadastre download format
+    "mmsi": "MMSI",
+    "base_date_time": "timestamp",
+    "latitude": "latitude",
+    "longitude": "longitude",
+    "sog": "SOG",
+    "cog": "COG",
+    "heading": "heading",
+    "vessel_name": "vessel_name",
+    "vessel_type": "vessel_type",
 }
 
 SYNTHETIC_COLUMN_MAP = {

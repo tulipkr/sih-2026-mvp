@@ -60,3 +60,31 @@ def test_normalize_after_missing_required_column_raises():
     df = pd.DataFrame({"MMSI": [1], "BaseDateTime": ["x"]})  # no LAT/LON
     with pytest.raises(ValueError, match="missing"):
         normalize_ais_schema(df, source_format="marinecadastre")
+
+def test_marinecadastre_actual_2021_lowercase_format():
+    """Actual Marine Cadastre 2021 download format must normalize correctly."""
+
+    df = pd.DataFrame({
+        "mmsi": [368210670],
+        "base_date_time": ["2021-10-02 14:33:46"],
+        "longitude": [-117.05272],
+        "latitude": [35.23633],
+        "sog": [10.0],
+        "cog": [180.0],
+        "heading": [180.0],
+        "vessel_name": ["MARLIN MAGIN"],
+        "vessel_type": [37],
+    })
+
+    normalized = normalize_ais_schema(
+        df,
+        source_format="marinecadastre"
+    )
+
+    assert list(normalized.columns) == NORMALIZED_COLUMNS
+    assert normalized.loc[0, "MMSI"] == "368210670"
+    assert normalized.loc[0, "timestamp"] == pd.Timestamp(
+        "2021-10-02 14:33:46", tz="UTC"
+    )
+    assert normalized.loc[0, "latitude"] == 35.23633
+    assert normalized.loc[0, "longitude"] == -117.05272
