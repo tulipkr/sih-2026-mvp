@@ -59,20 +59,31 @@ def build_fake_safe_product(
     include_vh: bool = True,
     include_calibration: bool = True,
     valid_georeferencing: bool = True,
+    use_gcps: bool = False,
     seed: int = 0,
 ) -> Path:
-    """Returns the path to the .SAFE directory it built."""
+    """Returns the path to the .SAFE directory it built.
+
+    `use_gcps=True` (with `valid_georeferencing=False`, since a raster with
+    real GCPs has no *direct* CRS/transform — that's the whole point) mimics
+    what the real product actually looks like: CRS=None, identity transform,
+    and a real GCP list rasterio must derive an approximate transform from.
+    """
     safe_root = root / f"{product_id}.SAFE"
     (safe_root / "measurement").mkdir(parents=True, exist_ok=True)
     (safe_root / "annotation" / "calibration").mkdir(parents=True, exist_ok=True)
     (safe_root / "manifest.safe").write_text("<xfdu:XFDU></xfdu:XFDU>")
 
     rng = np.random.RandomState(seed)
-    transform = (
-        Affine(10.0, 0, 500000, 0, -10.0, 3700000) if valid_georeferencing
-        else Affine.identity()
-    )
-    crs = "EPSG:32611" if valid_georeferencing else None  # UTM 11N, real zone for Southern California
+    if use_gcps:
+        transform = Affine.identity()
+        crs = None
+    elif valid_georeferencing:
+        transform = Affine(10.0, 0, 500000, 0, -10.0, 3700000)
+        crs = "EPSG:32611"
+    else:
+        transform = Affine.identity()
+        crs = None
 
     dn = np.full((height, width), dn_value, dtype=np.float32) + rng.normal(0, 5, (height, width)).astype(np.float32)
     profile = {
@@ -80,13 +91,35 @@ def build_fake_safe_product(
         "dtype": rasterio.float32, "crs": crs, "transform": transform,
     }
     vv_name = f"s1b-iw-grd-vv-{product_id.split('_')[4].lower()}-002.tiff"
-    with rasterio.open(safe_root / "measurement" / vv_name, "w", **profile) as dst:
+    vv_path = safe_root / "measurement" / vv_name
+    with rasterio.open(vv_path, "w", **profile) as dst:
         dst.write(dn, 1)
+        if use_gcps:
+            from rasterio.control import GroundControlPoint
+            gcps = [
+                GroundControlPoint(row=0, col=0, x=500000, y=3700000, z=0.0),
+                GroundControlPoint(row=0, col=width - 1, x=500000 + width * 10, y=3700000, z=0.0),
+                GroundControlPoint(row=height - 1, col=0, x=500000, y=3700000 - height * 10, z=0.0),
+                GroundControlPoint(row=height - 1, col=width - 1,
+                                    x=500000 + width * 10, y=3700000 - height * 10, z=0.0),
+            ]
+            dst.gcps = (gcps, "EPSG:32611")
 
     if include_vh:
         vh_name = f"s1b-iw-grd-vh-{product_id.split('_')[4].lower()}-001.tiff"
-        with rasterio.open(safe_root / "measurement" / vh_name, "w", **profile) as dst:
+        vh_path = safe_root / "measurement" / vh_name
+        with rasterio.open(vh_path, "w", **profile) as dst:
             dst.write(dn * 0.3, 1)
+            if use_gcps:
+                from rasterio.control import GroundControlPoint
+                gcps = [
+                    GroundControlPoint(row=0, col=0, x=500000, y=3700000, z=0.0),
+                    GroundControlPoint(row=0, col=width - 1, x=500000 + width * 10, y=3700000, z=0.0),
+                    GroundControlPoint(row=height - 1, col=0, x=500000, y=3700000 - height * 10, z=0.0),
+                    GroundControlPoint(row=height - 1, col=width - 1,
+                                        x=500000 + width * 10, y=3700000 - height * 10, z=0.0),
+                ]
+                dst.gcps = (gcps, "EPSG:32611")
 
     ann_vv = safe_root / "annotation" / vv_name.replace(".tiff", ".xml")
     _write_annotation_xml(ann_vv, "2021-10-03T01:49:27.000000", "2021-10-03T01:49:52.000000")

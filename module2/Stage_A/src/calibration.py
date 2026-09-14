@@ -89,23 +89,38 @@ def _linear_interp_weights(query: np.ndarray, knots: np.ndarray) -> tuple[np.nda
     return idx_lo, idx_hi, w_hi
 
 
+def build_sigma_naught_lut_window(
+    lines: np.ndarray, pixels: np.ndarray, sigma_grid: np.ndarray,
+    row_start: int, row_count: int, col_start: int, col_count: int,
+) -> np.ndarray:
+    """Same bilinear interpolation as build_sigma_naught_lut, but evaluated
+    only over a bounded (row_count x col_count) window — this NEVER
+    materializes a full-scene array. This is what real, large-scene
+    processing must call (once per tile/window), not the full-extent
+    version below, which only stays safe for small (e.g. test) inputs."""
+    window_cols = np.arange(col_start, col_start + col_count, dtype=np.float64)
+    along_pixels = np.empty((len(lines), col_count), dtype=np.float64)
+    for i in range(len(lines)):
+        along_pixels[i] = np.interp(window_cols, pixels, sigma_grid[i])
+
+    window_rows = np.arange(row_start, row_start + row_count, dtype=np.float64)
+    idx_lo, idx_hi, w_hi = _linear_interp_weights(window_rows, lines)
+    lo_vals = along_pixels[idx_lo]   # (row_count, col_count)
+    hi_vals = along_pixels[idx_hi]   # (row_count, col_count)
+    lut = lo_vals * (1.0 - w_hi)[:, None] + hi_vals * w_hi[:, None]
+    return lut.astype(np.float32)
+
+
 def build_sigma_naught_lut(
     lines: np.ndarray, pixels: np.ndarray, sigma_grid: np.ndarray, height: int, width: int
 ) -> np.ndarray:
-    """Bilinearly upsamples the coarse (lines x pixels) sigmaNought grid to
-    full (height x width) resolution, fully vectorized (no per-pixel Python
-    loop — real GRD scenes are ~25,000x17,000 px, per spec §21/§22)."""
-    full_width = np.arange(width, dtype=np.float64)
-    along_pixels = np.empty((len(lines), width), dtype=np.float64)
-    for i in range(len(lines)):
-        along_pixels[i] = np.interp(full_width, pixels, sigma_grid[i])
-
-    full_height = np.arange(height, dtype=np.float64)
-    idx_lo, idx_hi, w_hi = _linear_interp_weights(full_height, lines)
-    lo_vals = along_pixels[idx_lo]   # (height, width)
-    hi_vals = along_pixels[idx_hi]   # (height, width)
-    lut = lo_vals * (1.0 - w_hi)[:, None] + hi_vals * w_hi[:, None]
-    return lut.astype(np.float32)
+    """Full-extent convenience wrapper, implemented as the row_start=0/
+    col_start=0/full-size special case of build_sigma_naught_lut_window.
+    Only safe for small arrays (tests, small legacy inputs) — real
+    large-scene processing must call build_sigma_naught_lut_window per tile
+    instead of this, or the full-resolution LUT it builds is exactly the
+    memory problem windowed processing exists to avoid."""
+    return build_sigma_naught_lut_window(lines, pixels, sigma_grid, 0, height, 0, width)
 
 
 def calibrate_to_sigma0(dn: np.ndarray, sigma_naught_lut: np.ndarray) -> np.ndarray:
@@ -120,10 +135,25 @@ def calibrate_to_sigma0(dn: np.ndarray, sigma_naught_lut: np.ndarray) -> np.ndar
     return sigma0.astype(np.float32)
 
 
+def calibrate_window(
+    dn_window: np.ndarray, lines: np.ndarray, pixels: np.ndarray, sigma_grid: np.ndarray,
+    row_start: int, col_start: int,
+) -> np.ndarray:
+    """Calibrate one bounded window given already-parsed LUT arrays (parse
+    the XML once per band via parse_calibration_lut, reuse across every
+    tile — the LUT data itself is tiny and independent of scene size, so
+    there's no need to reparse per tile, only to avoid expanding it to full
+    scene resolution)."""
+    row_count, col_count = dn_window.shape
+    lut = build_sigma_naught_lut_window(lines, pixels, sigma_grid, row_start, row_count, col_start, col_count)
+    return calibrate_to_sigma0(dn_window, lut)
+
+
 def calibrate_band(dn: np.ndarray, calibration_xml_path: str | Path) -> np.ndarray:
     """Convenience wrapper: parse the LUT for one band's calibration XML and
-    calibrate a DN array of shape (height, width) to Sigma0."""
-    height, width = dn.shape
+    calibrate a DN array of shape (height, width) to Sigma0 in one call.
+    Safe for small arrays (tests, small legacy inputs) — for a real large
+    scene, parse_calibration_lut() once and call calibrate_window() per
+    tile instead, so the LUT is never expanded past one tile's extent."""
     lines, pixels, sigma_grid = parse_calibration_lut(calibration_xml_path)
-    lut = build_sigma_naught_lut(lines, pixels, sigma_grid, height, width)
-    return calibrate_to_sigma0(dn, lut)
+    return calibrate_window(dn, lines, pixels, sigma_grid, row_start=0, col_start=0)

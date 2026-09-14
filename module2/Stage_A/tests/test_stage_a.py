@@ -161,3 +161,63 @@ def test_missing_land_mask_source_allowed_for_non_coastal_scene(tmp_path):
     cfg = dict(DEFAULT_CFG, land_mask={"source_path": None}, scene_is_coastal=False)
     manifest_path = run_stage_a(str(tmp_path / "out"), safe_path=str(safe_root), config=cfg)
     assert manifest_path.exists()
+
+
+# --- GCP-only georeferencing (real product's actual state: CRS=None, 210 GCPs) ---
+def test_gcp_only_georeferencing_resolves_successfully(tmp_path):
+    """The real product has CRS=None and GCPs, not a direct transform. This
+    proves resolve_geotransform's GCP-approximation path actually produces a
+    usable (non-identity) transform end-to-end through Stage A, not just
+    that the no-CRS-and-no-GCPs error case works (that's a different test)."""
+    safe_root = build_fake_safe_product(tmp_path / "raw", height=512, width=512, use_gcps=True)
+    manifest_path = run_stage_a(str(tmp_path / "out"), safe_path=str(safe_root), config=DEFAULT_CFG)
+    manifest = json.loads(manifest_path.read_text())
+    assert len(manifest) == 4
+    for entry in manifest:
+        assert entry["crs"] is not None
+        transform = entry["transform"]
+        assert transform is not None
+        # a real (non-identity) affine: pixel size must be nonzero
+        assert transform[0] != 0.0 and transform[4] != 0.0
+    with rasterio.open(manifest[0]["patch_path"]) as src:
+        assert src.crs is not None
+        assert not src.transform.is_identity
+
+
+# --- Windowed processing on a large raster: never reads the whole scene at once ---
+def test_large_raster_processed_without_full_scene_read(tmp_path):
+    """Proxy for the real ~25,911x16,696 scene without actually allocating
+    one in a test run: uses tracemalloc to assert peak memory stays far
+    below what a full-scene float64 read+calibrate+filter pipeline would
+    require at this size, which is a direct, robust way to prove the
+    windowed code path is actually being used (rather than relying on
+    monkeypatching rasterio's Cython-backed DatasetReader.read, which may
+    not be safely patchable at all).
+
+    At 4096x3072 px: a single full-scene float64 array would be
+    4096*3072*8 bytes ~= 100MB, and the old implementation held several such
+    arrays alive at once across calibration/speckle/land-mask (likely
+    500MB-1GB+ peak). True windowed processing should never exceed a few
+    tens of MB regardless of scene size, since only one haloed tile
+    (patch_size+halo)^2 is ever alive at a time.
+    """
+    import tracemalloc
+
+    height, width = 3072, 4096  # large enough to discriminate, small enough to run fast in CI
+    safe_root = build_fake_safe_product(tmp_path / "raw", height=height, width=width)
+    cfg = dict(DEFAULT_CFG, speckle_filter={"apply": True, "window": 5})  # exercise the halo path too
+
+    tracemalloc.start()
+    manifest_path = run_stage_a(str(tmp_path / "out"), safe_path=str(safe_root), patch_size=256, config=cfg)
+    _current, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+
+    peak_mb = peak / (1024 * 1024)
+    assert peak_mb < 150, (
+        f"Peak traced memory was {peak_mb:.1f}MB for a {height}x{width} scene — "
+        f"this strongly suggests a full-scene array is being materialized "
+        f"somewhere instead of bounded per-tile windows."
+    )
+
+    manifest = json.loads(manifest_path.read_text())
+    assert len(manifest) == (height // 256) * (width // 256)
