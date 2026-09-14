@@ -1,0 +1,39 @@
+# Module 2 Stage A / Stage B config (spec §25 defaults), with one deliberate
+# deviation flagged explicitly below: normalization is OFF by default to
+# match Module 1's ACTUAL current config.yaml (data.normalization.method:
+# none), not the spec's idealized "always clip+normalize" contract. Module 1
+# is a trained checkpoint at this point — feeding it normalized [0,1] input
+# when it was trained on raw dB would silently break inference, which is a
+# worse outcome than temporarily deviating from the spec's stated default.
+# If Module 1's checkpoint is ever retrained with normalization on, this
+# MUST change to match — search both repos for "CROSS-MODULE CONTRACT" to
+# find every place that assumption is written down.
+
+stage_a:
+  patch_size: 256
+  patch_overlap_px: 0
+  speckle_filter:
+    apply: true
+    method: lee
+    window: 5
+  # CROSS-MODULE CONTRACT: must exactly match Module 1's
+  # configs/config.yaml -> data.normalization. Currently both sides agree by
+  # matching defaults (method: none) — see the file-level comment above.
+  normalization:
+    apply_db_clipping: false
+    apply_normalization: false
+    db_clip_min: -30
+    db_clip_max: 0
+  land_mask:
+    source_path: null   # set to a real coastline/ocean polygon file before a real coastal run
+  scene_is_coastal: true   # Huntington Beach (and most real spill demo scenes) are coastal
+  output_dir: "outputs_stage_a"
+
+stage_b:
+  min_polygon_area_km2: 0.01
+  area_projection_epsg: 6933
+  output_crs: "EPSG:4326"
+  saturated_mask_warning_fraction: 0.99
+  output_dir: "outputs_stage_b"
+
+seed: 42
