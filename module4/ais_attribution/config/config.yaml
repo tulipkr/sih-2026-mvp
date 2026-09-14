@@ -1,0 +1,10 @@
+search_margin_km: 20
+search_time_margin_hours: 6
+top_k_candidates: 10
+score_weights:
+  proximity: 0.5
+  temporal: 0.2
+  trajectory_drift: 0.3
+expected_ais_reporting_interval_minutes: 6
+mmsi_valid_range_check: true
+seed: 42
