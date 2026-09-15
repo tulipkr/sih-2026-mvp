@@ -1,0 +1,14 @@
+api_host: "0.0.0.0"
+api_port: 8000
+run_timeout_seconds: 600
+
+demo_scenes:
+  - scene_id: "00052"
+  - scene_id: "huntington_beach_2021"
+    name: "Huntington Beach Pipeline Incident"
+    precomputed: false
+    metadata:
+      acquisition_timestamp_utc: "2021-10-02T06:00:00Z"
+      location_name: "Huntington Beach, CA, USA"
+      bbox: [-118.1000, 33.5500, -117.9000, 33.6800]
+      crs: "EPSG:4326"
